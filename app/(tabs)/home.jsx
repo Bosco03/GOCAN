@@ -3,10 +3,11 @@ import { useTheme } from "@/context/ThemeContext";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import {
   Camera,
+  FillExtrusionLayer,
   MapView,
   MarkerView,
 } from "@maplibre/maplibre-react-native";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Alert,
   Modal,
@@ -17,17 +18,64 @@ import {
   View,
 } from "react-native";
 
-const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
-// Godfrey Okoye University — [longitude, latitude]
-const UNIVERSITY = [7.526507, 6.468656];
+// bright = clean colours, good road detail, no heavy green fill
+const STYLE_URL = "https://tiles.openfreemap.org/styles/bright";
+
+// Centre of Thinkers Corner neighbourhood
+const THINKERS_CORNER = [7.5278, 6.4683];
+const UNIVERSITY    = [7.526507, 6.468656];
+
+const LANDMARKS = [
+  {
+    id: "university",
+    name: "Godfrey Okoye University",
+    coordinate: [7.526507, 6.468656],
+    icon: "school",
+    color: "#1565C0",
+  },
+  {
+    id: "jideofor",
+    name: "Jideofor Street",
+    coordinate: [7.5287, 6.4680],
+    icon: "add-road",
+    color: "#2E7D32",
+  },
+  {
+    id: "agana",
+    name: "Agana Street",
+    coordinate: [7.5265, 6.4672],
+    icon: "add-road",
+    color: "#E65100",
+  },
+  {
+    id: "thinkers",
+    name: "Thinkers Corner",
+    coordinate: [7.5278, 6.4695],
+    icon: "location-city",
+    color: "#6A1B9A",
+  },
+];
 
 export default function Home() {
   const { colors } = useTheme();
   const { addFavorite } = useFavorites();
+  const cameraRef = useRef(null);
 
-  const [mapCenter, setMapCenter] = useState(UNIVERSITY);
+  const [mapCenter, setMapCenter] = useState(THINKERS_CORNER);
   const [modalVisible, setModalVisible] = useState(false);
   const [locationName, setLocationName] = useState("");
+  const [selectedLandmark, setSelectedLandmark] = useState(null);
+
+  // Snap camera back to Thinkers Corner
+  const resetCamera = () => {
+    cameraRef.current?.setCamera({
+      centerCoordinate: THINKERS_CORNER,
+      zoomLevel: 15.5,
+      pitch: 60,
+      heading: 0,
+      animationDuration: 800,
+    });
+  };
 
   const handleSave = () => {
     const trimmed = locationName.trim();
@@ -51,41 +99,127 @@ export default function Home() {
         style={styles.map}
         styleURL={STYLE_URL}
         logoEnabled={false}
-        attributionEnabled={true}
+        attributionEnabled={false}
+        // ── Google Maps-like gestures ──
+        scrollEnabled={true}
+        zoomEnabled={true}
+        rotateEnabled={true}
+        pitchEnabled={true}
+        compassEnabled={true}
         onCameraChanged={(state) => {
           const { center } = state.properties;
           setMapCenter([center[0], center[1]]);
         }}
       >
-        <Camera zoomLevel={16} centerCoordinate={UNIVERSITY} />
+        <Camera
+          ref={cameraRef}
+          zoomLevel={15.5}
+          centerCoordinate={THINKERS_CORNER}
+          pitch={60}       // strong tilt → buildings clearly 3D
+          heading={0}
+          animationDuration={1200}
+          minZoomLevel={13} // don't zoom out past neighbourhood level
+          maxZoomLevel={20}
+        />
 
-        {/* University marker */}
-        <MarkerView coordinate={UNIVERSITY}>
-          <View
-            style={[styles.markerBubble, { backgroundColor: colors.primary }]}
-          >
-            <MaterialIcons name="school" size={18} color="#fff" />
-          </View>
-          <View
-            style={[styles.markerPin, { borderTopColor: colors.primary }]}
-          />
-        </MarkerView>
+        {/*
+          3D Buildings layer — pulled directly from the openmaptiles
+          vector source that the bright style already loads.
+          render_height / render_min_height come from the tile data.
+          Buildings appear from zoom 14 upward.
+        */}
+        <FillExtrusionLayer
+          id="custom-3d-buildings"
+          sourceID="openmaptiles"
+          sourceLayerID="building"
+          minZoomLevel={14}
+          style={{
+            fillExtrusionColor: [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              14, "#d6d0cb",
+              17, "#c9c2ba",
+            ],
+            fillExtrusionHeight: [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              14, 0,
+              14.5, ["get", "render_height"],
+            ],
+            fillExtrusionBase: [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              14, 0,
+              14.5, ["get", "render_min_height"],
+            ],
+            fillExtrusionOpacity: 0.9,
+          }}
+        />
+
+        {/* Landmark pins */}
+        {LANDMARKS.map((lm) => (
+          <MarkerView key={lm.id} coordinate={lm.coordinate}>
+            <TouchableOpacity
+              onPress={() => setSelectedLandmark(lm)}
+              activeOpacity={0.85}
+            >
+              <View style={[styles.pin, { backgroundColor: lm.color }]}>
+                <MaterialIcons name={lm.icon} size={15} color="#fff" />
+              </View>
+              {lm.id === "university" && (
+                <View style={[styles.pinTail, { borderTopColor: lm.color }]} />
+              )}
+            </TouchableOpacity>
+          </MarkerView>
+        ))}
       </MapView>
 
-      {/* University label */}
+      {/* ── Top label ── */}
       <View
         style={[styles.labelBanner, { backgroundColor: colors.primary + "EE" }]}
       >
-        <MaterialIcons name="school" size={14} color="#fff" />
-        <Text style={styles.labelText}>Godfrey Okoye University</Text>
+        <MaterialIcons name="location-city" size={14} color="#fff" />
+        <Text style={styles.labelText}>Thinkers Corner, Enugu</Text>
       </View>
 
-      {/* Crosshair at map center */}
-      <View style={styles.crosshair} pointerEvents="none">
-        <MaterialIcons name="add" size={36} color={colors.primary} />
-      </View>
+      {/* ── Landmark popup ── */}
+      {selectedLandmark && (
+        <View style={[styles.popup, { backgroundColor: colors.card }]}>
+          <View
+            style={[styles.popupAccent, { backgroundColor: selectedLandmark.color }]}
+          />
+          <View style={styles.popupContent}>
+            <MaterialIcons
+              name={selectedLandmark.icon}
+              size={18}
+              color={selectedLandmark.color}
+            />
+            <Text style={[styles.popupText, { color: colors.text }]}>
+              {selectedLandmark.name}
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => setSelectedLandmark(null)}
+            style={styles.popupClose}
+          >
+            <MaterialIcons name="close" size={18} color={colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+      )}
 
-      {/* Save location FAB */}
+      {/* ── Reset / re-centre button ── */}
+      <TouchableOpacity
+        style={[styles.resetBtn, { backgroundColor: colors.card }]}
+        onPress={resetCamera}
+        activeOpacity={0.85}
+      >
+        <MaterialIcons name="my-location" size={22} color={colors.primary} />
+      </TouchableOpacity>
+
+      {/* ── Save location FAB ── */}
       <TouchableOpacity
         style={[styles.fab, { backgroundColor: colors.primary }]}
         onPress={() => setModalVisible(true)}
@@ -94,7 +228,7 @@ export default function Home() {
         <MaterialIcons name="bookmark-add" size={26} color="#fff" />
       </TouchableOpacity>
 
-      {/* Save location modal */}
+      {/* ── Save location modal ── */}
       <Modal
         transparent
         animationType="slide"
@@ -109,7 +243,6 @@ export default function Home() {
             <Text style={[styles.modalCoords, { color: colors.textSecondary }]}>
               {mapCenter[1].toFixed(5)}, {mapCenter[0].toFixed(5)}
             </Text>
-
             <TextInput
               style={[
                 styles.input,
@@ -125,7 +258,6 @@ export default function Home() {
               onChangeText={setLocationName}
               autoFocus
             />
-
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.btnCancel, { borderColor: colors.border }]}
@@ -138,7 +270,6 @@ export default function Home() {
                   Cancel
                 </Text>
               </TouchableOpacity>
-
               <TouchableOpacity
                 style={[styles.btnSave, { backgroundColor: colors.primary }]}
                 onPress={handleSave}
@@ -157,24 +288,26 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
 
-  markerBubble: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  pin: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.35,
     shadowRadius: 3,
-    elevation: 4,
+    elevation: 5,
   },
-  markerPin: {
+  pinTail: {
     width: 0,
     height: 0,
-    borderLeftWidth: 6,
-    borderRightWidth: 6,
-    borderTopWidth: 10,
+    borderLeftWidth: 5,
+    borderRightWidth: 5,
+    borderTopWidth: 9,
     borderLeftColor: "transparent",
     borderRightColor: "transparent",
     alignSelf: "center",
@@ -191,24 +324,59 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: 20,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 4,
   },
-  labelText: {
-    color: "#fff",
-    fontSize: 13,
-    fontWeight: "600",
-  },
+  labelText: { color: "#fff", fontSize: 13, fontWeight: "600" },
 
-  crosshair: {
+  popup: {
     position: "absolute",
-    top: "50%",
-    left: "50%",
-    marginTop: -18,
-    marginLeft: -18,
+    bottom: 110,
+    left: 16,
+    right: 16,
+    borderRadius: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  popupAccent: { width: 5, alignSelf: "stretch" },
+  popupContent: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 14,
+  },
+  popupText: { fontSize: 15, fontWeight: "600", flex: 1 },
+  popupClose: { padding: 14 },
+
+  resetBtn: {
+    position: "absolute",
+    bottom: 100,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
   },
 
   fab: {
     position: "absolute",
-    bottom: 30,
+    bottom: 40,
     right: 20,
     width: 56,
     height: 56,
@@ -233,15 +401,8 @@ const styles = StyleSheet.create({
     padding: 24,
     paddingBottom: 40,
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    marginBottom: 4,
-  },
-  modalCoords: {
-    fontSize: 12,
-    marginBottom: 16,
-  },
+  modalTitle: { fontSize: 18, fontWeight: "700", marginBottom: 4 },
+  modalCoords: { fontSize: 12, marginBottom: 16 },
   input: {
     borderWidth: 1,
     borderRadius: 10,
@@ -250,10 +411,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     marginBottom: 16,
   },
-  modalButtons: {
-    flexDirection: "row",
-    gap: 12,
-  },
+  modalButtons: { flexDirection: "row", gap: 12 },
   btnCancel: {
     flex: 1,
     borderWidth: 1,
